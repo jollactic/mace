@@ -226,6 +226,11 @@ def configure_model(
                 default_dtype=dtype_dict.get(args.default_dtype, torch.float64),
             )
 
+    # Transfer can copy derived self buffers from a screened foundation with a
+    # different kappa. Rebuild them from the final fixed configuration.
+    if args.model == "PolarMACE" and getattr(model, "spin_yukawa_kappa", None) is not None:
+        model.set_spin_yukawa(model.spin_yukawa_kappa)
+
     return model, output_args
 
 
@@ -331,7 +336,11 @@ def _build_model(
             use_agnostic_product=args.use_agnostic_product,
         )
     if args.model == "PolarMACE" and model_config_foundation is not None:
-        return modules.PolarMACE(**model_config_foundation)
+        foundation_config = model_config_foundation.copy()
+        spin_yukawa_kappa = getattr(args, "spin_yukawa_kappa", None)
+        if spin_yukawa_kappa is not None:
+            foundation_config["spin_yukawa_kappa"] = spin_yukawa_kappa
+        return modules.PolarMACE(**foundation_config)
     if args.model == "PolarMACE":
         field_feature_widths = _parse_literal_or_none(args.field_feature_widths)
         field_feature_norms = _parse_literal_or_none(args.field_feature_norms)
@@ -361,6 +370,7 @@ def _build_model(
             field_feature_widths=(
                 field_feature_widths if field_feature_widths is not None else [1.0]
             ),
+            spin_yukawa_kappa=getattr(args, "spin_yukawa_kappa", None),
             num_recursion_steps=args.num_recursion_steps,
             field_si=args.field_si,
             include_electrostatic_self_interaction=args.include_electrostatic_self_interaction,

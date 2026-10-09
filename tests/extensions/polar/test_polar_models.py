@@ -1349,3 +1349,21 @@ def test_polar_mace_registers_all_trainable_parameters():
     model = _build_minimal_model(torch.device("cpu"), torch.get_default_dtype())
     args = _optimizer_args()
     get_optimizer(args, get_params_options(args, model))
+
+
+@pytest.mark.parametrize("kappa", [None, 0.7])
+def test_polar_foundation_yukawa_override_preserves_config(kappa):
+    from types import SimpleNamespace
+    from mace.tools.model_script_utils import _build_model
+    from mace.tools.scripts_utils import extract_config_mace_model
+
+    foundation = _build_minimal_model("cpu", torch.float64)
+    config = extract_config_mace_model(foundation)
+    rebuilt = _build_model(
+        SimpleNamespace(model="PolarMACE", spin_yukawa_kappa=kappa),
+        {}, config, ["Default"],
+    )
+    assert rebuilt.spin_yukawa_kappa == kappa
+    assert config["spin_yukawa_kappa"] is None
+    if kappa is not None:
+        assert hasattr(rebuilt.electric_potential_descriptor, "realspace_yukawa_features")

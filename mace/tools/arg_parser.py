@@ -308,6 +308,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         choices=["silu", "tanh", "abs", "None"],
     )
     parser.add_argument(
+        "--spin_yukawa_kappa", type=float, default=None,
+        help="Fixed spin Yukawa screening wavevector in inverse Angstrom (isolated realspace or bulk PBC)",
+    )
+    parser.add_argument(
         "--kspace_cutoff_factor",
         help="k-space cutoff factor used by PolarMACE",
         type=float,
