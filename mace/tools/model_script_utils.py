@@ -340,6 +340,9 @@ def _build_model(
         spin_yukawa_kappa = getattr(args, "spin_yukawa_kappa", None)
         if spin_yukawa_kappa is not None:
             foundation_config["spin_yukawa_kappa"] = spin_yukawa_kappa
+        spin_enabled = getattr(args, "spin_interaction_enabled", None)
+        if spin_enabled is not None:
+            foundation_config["spin_interaction_enabled"] = spin_enabled
         return modules.PolarMACE(**foundation_config)
     if args.model == "PolarMACE":
         field_feature_widths = _parse_literal_or_none(args.field_feature_widths)
@@ -370,6 +373,8 @@ def _build_model(
             field_feature_widths=(
                 field_feature_widths if field_feature_widths is not None else [1.0]
             ),
+            spin_interaction_enabled=(getattr(args, "spin_interaction_enabled", None)
+                                      if getattr(args, "spin_interaction_enabled", None) is not None else True),
             spin_yukawa_kappa=getattr(args, "spin_yukawa_kappa", None),
             num_recursion_steps=args.num_recursion_steps,
             field_si=args.field_si,

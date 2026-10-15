@@ -308,6 +308,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         choices=["silu", "tanh", "abs", "None"],
     )
     parser.add_argument(
+        "--spin_interaction_enabled", type=str2bool, default=None,
+        help="Enable long-range spin propagation; False leaves charge Coulomb only",
+    )
+    parser.add_argument(
         "--spin_yukawa_kappa", type=float, default=None,
         help="Fixed spin Yukawa screening wavevector in inverse Angstrom (isolated realspace or bulk PBC)",
     )

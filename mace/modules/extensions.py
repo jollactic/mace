@@ -687,6 +687,7 @@ class PolarMACE(ScaleShiftMACE):
         field_readout_config: Optional[Dict[str, Any]] = None,
         pbc_handling: str = "auto",
         spin_yukawa_kappa: Optional[float] = None,
+        spin_interaction_enabled: bool = True,
         **kwargs,
     ):
         if not GRAPH_LONGRANGE_AVAILABLE:
@@ -830,6 +831,7 @@ class PolarMACE(ScaleShiftMACE):
             integral_normalization="receiver",
             pbc_handling=pbc_handling,
         )
+        self.spin_interaction_enabled = spin_interaction_enabled
         self.set_spin_yukawa(spin_yukawa_kappa)
 
         field_layout_target = (
@@ -963,6 +965,10 @@ class PolarMACE(ScaleShiftMACE):
         """Restore whole-model pickles, repairing known legacy electrostatic state."""
         super().__setstate__(state)
         ensure_polar_compatibility(self)
+
+    def set_spin_interaction_enabled(self, enabled: bool = True) -> None:
+        """Enable or completely suppress the propagated spin field, preserving charge."""
+        self.spin_interaction_enabled = bool(enabled)
 
     def set_spin_yukawa(self, kappa: Optional[float] = None) -> None:
         """Enable fixed isolated or bulk spin screening, or restore Coulomb spin with None."""
@@ -1152,7 +1158,8 @@ class PolarMACE(ScaleShiftMACE):
 
         spin_yukawa_kappa = getattr(self, "spin_yukawa_kappa", None)
         k_factor_yukawa = None
-        if spin_yukawa_kappa is not None:
+        spin_interaction_enabled = getattr(self, "spin_interaction_enabled", True)
+        if spin_interaction_enabled and spin_yukawa_kappa is not None:
             if field_feature_cache.get("mode") == "pbc":
                 if not bool(torch.all(pbc)):
                     raise ValueError("Spin Yukawa supports isolated realspace or fully periodic geometries.")
@@ -1210,7 +1217,14 @@ class PolarMACE(ScaleShiftMACE):
             if charges_to_mul_ir is not None:
                 source_feats_alpha = charges_to_mul_ir(source_feats_alpha)
                 source_feats_beta = charges_to_mul_ir(source_feats_beta)
-            if spin_yukawa_kappa is None:
+            if not spin_interaction_enabled:
+                field_charge = self.electric_potential_descriptor.forward_dynamic(
+                    cache=field_feature_cache,
+                    source_feats=source_feats_alpha + source_feats_beta,
+                )
+                field_feats_alpha = 0.5 * field_charge
+                field_feats_beta = 0.5 * field_charge
+            elif spin_yukawa_kappa is None:
                 field_feats_alpha = self.electric_potential_descriptor.forward_dynamic(
                     cache=field_feature_cache,
                     source_feats=source_feats_alpha,
