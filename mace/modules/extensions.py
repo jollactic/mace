@@ -12,7 +12,7 @@ from e3nn.util.jit import compile_mode
 
 try:
     from graph_longrange.energy import GTOElectrostaticEnergy
-    from graph_longrange.features import GTOElectrostaticFeatures, compute_yukawa_factor
+    from graph_longrange.features import GTOElectrostaticFeatures
     from graph_longrange.gto_utils import (
         DisplacedGTOExternalFieldBlock,
         gto_basis_kspace_cutoff,
@@ -687,7 +687,7 @@ class PolarMACE(ScaleShiftMACE):
         field_readout_config: Optional[Dict[str, Any]] = None,
         pbc_handling: str = "auto",
         spin_yukawa_kappa: Optional[float] = None,
-        spin_interaction_enabled: bool = True,
+        spin_interaction_enabled: bool = False,
         **kwargs,
     ):
         if not GRAPH_LONGRANGE_AVAILABLE:
@@ -831,7 +831,7 @@ class PolarMACE(ScaleShiftMACE):
             integral_normalization="receiver",
             pbc_handling=pbc_handling,
         )
-        self.spin_interaction_enabled = spin_interaction_enabled
+        self.set_spin_interaction_enabled(spin_interaction_enabled)
         self.set_spin_yukawa(spin_yukawa_kappa)
 
         field_layout_target = (
@@ -961,19 +961,34 @@ class PolarMACE(ScaleShiftMACE):
             cueq_config=cueq_config,
         )
 
+        self.configure_charge_only_tied_fields()
+
+    def configure_charge_only_tied_fields(self) -> None:
+        """Idempotently convert pretrained field maps; this branch is charge-only."""
+        from .field_blocks import AgnosticChargeBiasedLinearPotentialEmbedding, TiedSpinFieldLinear
+        self.spin_interaction_enabled = False
+        self.spin_yukawa_kappa = None
+        for module in list(self.modules()):
+            if isinstance(module, AgnosticChargeBiasedLinearPotentialEmbedding):
+                if not isinstance(module.potential_linear, TiedSpinFieldLinear):
+                    module.potential_linear = TiedSpinFieldLinear(module.potential_linear)
+
     def __setstate__(self, state):
-        """Restore whole-model pickles, repairing known legacy electrostatic state."""
+        """Restore and convert whole-model weights to charge-only tied fields."""
         super().__setstate__(state)
         ensure_polar_compatibility(self)
+        self.configure_charge_only_tied_fields()
 
-    def set_spin_interaction_enabled(self, enabled: bool = True) -> None:
-        """Enable or completely suppress the propagated spin field, preserving charge."""
-        self.spin_interaction_enabled = bool(enabled)
+    def set_spin_interaction_enabled(self, enabled: bool = False) -> None:
+        """This branch permits only charge-field propagation."""
+        if enabled:
+            raise ValueError("tie-spin-field-weights only supports spin_interaction_enabled=False")
+        self.spin_interaction_enabled = False
 
     def set_spin_yukawa(self, kappa: Optional[float] = None) -> None:
-        """Enable fixed isolated or bulk spin screening, or restore Coulomb spin with None."""
+        """Accept only None: no spin field is propagated on this branch."""
         if kappa is not None:
-            self.electric_potential_descriptor.configure_yukawa(kappa)
+            raise ValueError("This charge-only branch does not propagate a Yukawa spin field")
         self.spin_yukawa_kappa = kappa
 
     def set_electrostatic_pbcs(self, pbc_handling: str) -> None:
@@ -1156,15 +1171,6 @@ class PolarMACE(ScaleShiftMACE):
         )
         self.electric_potential_descriptor.static_quantities = None
 
-        spin_yukawa_kappa = getattr(self, "spin_yukawa_kappa", None)
-        k_factor_yukawa = None
-        spin_interaction_enabled = getattr(self, "spin_interaction_enabled", True)
-        if spin_interaction_enabled and spin_yukawa_kappa is not None:
-            if field_feature_cache.get("mode") == "pbc":
-                if not bool(torch.all(pbc)):
-                    raise ValueError("Spin Yukawa supports isolated realspace or fully periodic geometries.")
-                k_factor_yukawa = compute_yukawa_factor(kv_norms_squared, spin_yukawa_kappa)
-
         # SCF fixed point
         features_mixed = self.layer_feature_mixer(torch.stack(node_feats_list, dim=0))
         spin_charge_density = spin_charge_density.view(
@@ -1217,34 +1223,13 @@ class PolarMACE(ScaleShiftMACE):
             if charges_to_mul_ir is not None:
                 source_feats_alpha = charges_to_mul_ir(source_feats_alpha)
                 source_feats_beta = charges_to_mul_ir(source_feats_beta)
-            if not spin_interaction_enabled:
-                field_charge = self.electric_potential_descriptor.forward_dynamic(
-                    cache=field_feature_cache,
-                    source_feats=source_feats_alpha + source_feats_beta,
-                )
-                field_feats_alpha = 0.5 * field_charge
-                field_feats_beta = 0.5 * field_charge
-            elif spin_yukawa_kappa is None:
-                field_feats_alpha = self.electric_potential_descriptor.forward_dynamic(
-                    cache=field_feature_cache,
-                    source_feats=source_feats_alpha,
-                )
-                field_feats_beta = self.electric_potential_descriptor.forward_dynamic(
-                    cache=field_feature_cache,
-                    source_feats=source_feats_beta,
-                )
-            else:
-                field_charge = self.electric_potential_descriptor.forward_dynamic(
-                    cache=field_feature_cache,
-                    source_feats=source_feats_alpha + source_feats_beta,
-                )
-                field_spin = self.electric_potential_descriptor.forward_dynamic_yukawa(
-                    cache=field_feature_cache,
-                    source_feats=source_feats_alpha - source_feats_beta,
-                    k_factor_yukawa=k_factor_yukawa,
-                )
-                field_feats_alpha = 0.5 * (field_charge + field_spin)
-                field_feats_beta = 0.5 * (field_charge - field_spin)
+            # Charge-only propagation: a single Coulomb solve, split equally.
+            field_charge = self.electric_potential_descriptor.forward_dynamic(
+                cache=field_feature_cache,
+                source_feats=source_feats_alpha + source_feats_beta,
+            )
+            field_feats_alpha = 0.5 * field_charge
+            field_feats_beta = 0.5 * field_charge
             field_from_mul_ir = getattr(self, "_field_from_mul_ir", None)
             if field_from_mul_ir is not None:
                 field_feats_alpha = field_from_mul_ir(field_feats_alpha)

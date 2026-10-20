@@ -374,7 +374,7 @@ def _build_model(
                 field_feature_widths if field_feature_widths is not None else [1.0]
             ),
             spin_interaction_enabled=(getattr(args, "spin_interaction_enabled", None)
-                                      if getattr(args, "spin_interaction_enabled", None) is not None else True),
+                                      if getattr(args, "spin_interaction_enabled", None) is not None else False),
             spin_yukawa_kappa=getattr(args, "spin_yukawa_kappa", None),
             num_recursion_steps=args.num_recursion_steps,
             field_si=args.field_si,

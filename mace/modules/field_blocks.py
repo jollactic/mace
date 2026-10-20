@@ -114,6 +114,43 @@ class PotentialEmbeddingBlock(torch.nn.Module):
         ...
 
 
+class TiedSpinFieldLinear(torch.nn.Module):
+    """One learned map of alpha+beta, initialized to the mean effective map.
+
+    Input is the concatenation of two identical mul_ir layouts. Conversion
+    accounts for e3nn path normalization, not just stored parameter values.
+    """
+
+    def __init__(self, original):
+        super().__init__()
+        irreps = original.irreps_in
+        half = len(irreps) // 2
+        if len(irreps) % 2 or irreps[:half] != irreps[half:]:
+            raise ValueError("Expected concatenated identical alpha/beta field irreps")
+        if original.bias.numel():
+            raise ValueError("Tied conversion currently requires an unbiased field linear")
+        self.channel_dim = irreps[:half].dim
+        self.linear = o3.Linear(irreps[:half], original.irreps_out).to(original.weight)
+        with torch.no_grad():
+            self.linear.weight.zero_()
+            for old_index, instruction in enumerate(original.instructions):
+                target = (instruction.i_in % half, instruction.i_out)
+                for new_index, new_instruction in enumerate(self.linear.instructions):
+                    if (new_instruction.i_in, new_instruction.i_out) == target:
+                        scale = 0.5 * instruction.path_weight / new_instruction.path_weight
+                        self.linear.weight_view_for_instruction(new_index).add_(
+                            original.weight_view_for_instruction(old_index), alpha=scale
+                        )
+                        break
+                else:
+                    raise ValueError("Missing matching tied field instruction")
+        self.train(original.training)
+        self.linear.weight.requires_grad_(original.weight.requires_grad)
+
+    def forward(self, fields: torch.Tensor) -> torch.Tensor:
+        return self.linear(fields[..., :self.channel_dim] + fields[..., self.channel_dim:])
+
+
 @compile_mode("script")
 class AgnosticChargeBiasedLinearPotentialEmbedding(
     PotentialEmbeddingBlock

@@ -309,11 +309,11 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--spin_interaction_enabled", type=str2bool, default=None,
-        help="Enable long-range spin propagation; False leaves charge Coulomb only",
+        help="Charge-only tied-field branch: only False is supported",
     )
     parser.add_argument(
         "--spin_yukawa_kappa", type=float, default=None,
-        help="Fixed spin Yukawa screening wavevector in inverse Angstrom (isolated realspace or bulk PBC)",
+        help="Unsupported on this charge-only branch; omit this option",
     )
     parser.add_argument(
         "--kspace_cutoff_factor",

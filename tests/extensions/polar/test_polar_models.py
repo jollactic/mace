@@ -1359,6 +1359,10 @@ def test_polar_foundation_yukawa_override_preserves_config(kappa):
 
     foundation = _build_minimal_model("cpu", torch.float64)
     config = extract_config_mace_model(foundation)
+    if kappa is not None:
+        with pytest.raises(ValueError, match="charge-only"):
+            _build_model(SimpleNamespace(model="PolarMACE", spin_yukawa_kappa=kappa), {}, config, ["Default"])
+        return
     rebuilt = _build_model(
         SimpleNamespace(model="PolarMACE", spin_yukawa_kappa=kappa),
         {}, config, ["Default"],
