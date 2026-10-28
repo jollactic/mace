@@ -709,6 +709,8 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
                         help="Scalar per-atom alpha-minus-beta spin target array")
     parser.add_argument("--atomic_spin_mask_key", type=str, default="REF_spin_mask",
                         help="Optional boolean per-atom spin label mask")
+    parser.add_argument("--atomic_spin_tolerance", type=float, default=0.0,
+                        help="Zero-loss half-width around scalar spin targets; penalties are squared beyond the band")
     parser.add_argument("--atomic_spin_weight", type=float, default=0.0,
                         help="Weight of masked atomic spin MSE; zero disables supervision")
     parser.add_argument(

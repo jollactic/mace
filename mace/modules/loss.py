@@ -662,11 +662,14 @@ class WeightedEnergyForcesL1L2Loss(torch.nn.Module):
 class AtomicSpinLoss(torch.nn.Module):
     """Add masked scalar alpha-minus-beta supervision to an existing loss."""
 
-    def __init__(self, base_loss, spin_weight):
+    def __init__(self, base_loss, spin_weight, tolerance=0.0):
         super().__init__()
         if not torch.isfinite(torch.tensor(spin_weight)) or spin_weight < 0:
             raise ValueError("atomic_spin_weight must be finite and nonnegative")
+        if not torch.isfinite(torch.tensor(tolerance)) or tolerance < 0:
+            raise ValueError("atomic_spin_tolerance must be finite and nonnegative")
         self.base_loss = base_loss
+        self.register_buffer("atomic_spin_tolerance", torch.tensor(tolerance, dtype=torch.get_default_dtype()))
         self.register_buffer("atomic_spin_weight", torch.tensor(spin_weight, dtype=torch.get_default_dtype()))
 
     def forward(self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None):
@@ -681,7 +684,8 @@ class AtomicSpinLoss(torch.nn.Module):
         weights = ref.weight[ref.batch] * ref.atomic_spin_weight[ref.batch]
         mask = ref.atomic_spin_mask & (weights > 0)
         residual = torch.where(mask, prediction-target, torch.zeros_like(prediction))
-        numerator = (weights * residual.square()).sum()
+        excess = torch.clamp_min(residual.abs() - self.atomic_spin_tolerance, 0.0)
+        numerator = (weights * excess.square()).sum()
         count = mask.sum().to(prediction.dtype)
         distributed = is_ddp_enabled() if ddp is None else ddp
         scale = 1
@@ -692,4 +696,4 @@ class AtomicSpinLoss(torch.nn.Module):
         return base + self.atomic_spin_weight * spin_loss
 
     def __repr__(self):
-        return f"AtomicSpinLoss(base={self.base_loss}, atomic_spin_weight={self.atomic_spin_weight.item():g})"
+        return f"AtomicSpinLoss(base={self.base_loss}, atomic_spin_weight={self.atomic_spin_weight.item():g}, tolerance={self.atomic_spin_tolerance.item():g})"

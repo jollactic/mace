@@ -841,6 +841,9 @@ def get_loss_fn(
 
 def _with_atomic_spin_loss(args, loss_fn):
     weight = getattr(args, "atomic_spin_weight", 0.0)
+    tolerance = getattr(args, "atomic_spin_tolerance", 0.0)
+    if not np.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("atomic_spin_tolerance must be finite and nonnegative")
     if not np.isfinite(weight) or weight < 0:
         raise ValueError("atomic_spin_weight must be finite and nonnegative")
     if weight == 0:
@@ -848,7 +851,7 @@ def _with_atomic_spin_loss(args, loss_fn):
     if args.model != "PolarMACE":
         raise ValueError("Atomic spin supervision currently supports PolarMACE only")
     from mace.modules.loss import AtomicSpinLoss
-    return AtomicSpinLoss(loss_fn, weight)
+    return AtomicSpinLoss(loss_fn, weight, tolerance=tolerance)
 
 
 def get_swa(

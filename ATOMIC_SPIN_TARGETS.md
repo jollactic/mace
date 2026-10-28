@@ -46,3 +46,21 @@ including mixed labelled/unlabelled graph batches. The configuration-based
 HDF5 preprocessing path preserves them; the preprocessing parser exposes both
 key options. Existing raw AtomicData archives must be regenerated to carry
 these new fields before using spin supervision.
+
+
+## Tolerance band
+
+Set `"atomic_spin_tolerance": "0.2"` in the training options (or pass
+`--atomic_spin_tolerance=0.2`). The spin penalty per labelled atom becomes
+`max(0, abs(prediction - target) - tolerance)**2`. Both penalty and gradient
+are zero inside the band, and the penalty grows quadratically beyond it.
+Tolerance must be finite and nonnegative; zero preserves ordinary squared
+error. The same value is used in Stage Two. Masking and configuration weights
+are unchanged; all active labelled atoms still count in the denominator,
+including those inside the tolerance band. Validation RMSE and MAE continue
+to measure raw spin errors, not tolerance-adjusted errors.
+
+For a zero target and tolerance 0.2, [-0.2, 0.2] is accepted without spin-loss
+pressure. Other losses may still change the prediction. This defines an
+acceptable range, not an uncertainty distribution or a modified global spin
+constraint. The tolerance is a training loss setting, not an inference option.

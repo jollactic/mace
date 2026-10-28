@@ -75,6 +75,36 @@ class AtomicSpinTests(unittest.TestCase):
         loss = AtomicSpinLoss(ZeroLoss(), 1.)(batch, {"spins": torch.tensor([2., 3.])})
         self.assertEqual(loss.item(), 2.)
 
+    def test_tolerance_band_loss_and_gradients(self):
+        batch = Batch.from_data_list([self.graph([0., 0.]), self.graph([0., 0.]), self.graph()])
+        prediction = torch.tensor([.1, .2, .3, -.5, 8., 9.], dtype=torch.float64, requires_grad=True)
+        loss = AtomicSpinLoss(ZeroLoss(), 2., tolerance=.2).double()(batch, {"spins": prediction})
+        # Four labelled atoms, including those within the band, in the denominator.
+        self.assertAlmostEqual(loss.item(), 2*(.1**2+.3**2)/4, places=8)
+        loss.backward()
+        torch.testing.assert_close(prediction.grad, torch.tensor([0., 0., .1, -.3, 0., 0.], dtype=torch.float64), atol=1e-8, rtol=1e-6)
+
+    def test_tolerance_zero_matches_squared_error(self):
+        batch = Batch.from_data_list([self.graph([1., 0.])])
+        prediction = torch.tensor([1.5, -.3], requires_grad=True)
+        actual = AtomicSpinLoss(ZeroLoss(), 2., tolerance=0.)(batch, {"spins": prediction})
+        expected = 2*(prediction-batch.atomic_spin).square().mean()
+        torch.testing.assert_close(actual, expected)
+        actual_gradient, = torch.autograd.grad(actual, prediction, retain_graph=True)
+        expected_gradient, = torch.autograd.grad(expected, prediction)
+        torch.testing.assert_close(actual_gradient, expected_gradient)
+
+    def test_invalid_tolerances_and_factory(self):
+        from types import SimpleNamespace
+        from mace.tools.scripts_utils import _with_atomic_spin_loss
+        for value in [-.1, float("nan"), float("inf")]:
+            with self.assertRaises(ValueError):
+                AtomicSpinLoss(ZeroLoss(), 1., tolerance=value)
+            with self.assertRaises(ValueError):
+                _with_atomic_spin_loss(SimpleNamespace(atomic_spin_weight=1., atomic_spin_tolerance=value, model="PolarMACE"), ZeroLoss())
+        loss = _with_atomic_spin_loss(SimpleNamespace(atomic_spin_weight=1., atomic_spin_tolerance=.2, model="PolarMACE"), ZeroLoss())
+        self.assertAlmostEqual(loss.atomic_spin_tolerance.item(), .2)
+
 
 if __name__ == "__main__":
     unittest.main()
