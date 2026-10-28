@@ -836,7 +836,19 @@ def get_loss_fn(
         )
     else:
         loss_fn = modules.WeightedEnergyForcesLoss(energy_weight=1.0, forces_weight=1.0)
-    return loss_fn
+    return _with_atomic_spin_loss(args, loss_fn)
+
+
+def _with_atomic_spin_loss(args, loss_fn):
+    weight = getattr(args, "atomic_spin_weight", 0.0)
+    if not np.isfinite(weight) or weight < 0:
+        raise ValueError("atomic_spin_weight must be finite and nonnegative")
+    if weight == 0:
+        return loss_fn
+    if args.model != "PolarMACE":
+        raise ValueError("Atomic spin supervision currently supports PolarMACE only")
+    from mace.modules.loss import AtomicSpinLoss
+    return AtomicSpinLoss(loss_fn, weight)
 
 
 def get_swa(
@@ -921,7 +933,7 @@ def get_swa(
             anneal_strategy="linear",
         ),
         start=args.start_swa,
-        loss_fn=loss_fn_energy,
+        loss_fn=_with_atomic_spin_loss(args, loss_fn_energy),
     )
     return swa, swas
 

@@ -705,6 +705,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=DefaultKeys.POLARIZABILITY.value,
     )
+    parser.add_argument("--atomic_spin_key", type=str, default="REF_spin",
+                        help="Scalar per-atom alpha-minus-beta spin target array")
+    parser.add_argument("--atomic_spin_mask_key", type=str, default="REF_spin_mask",
+                        help="Optional boolean per-atom spin label mask")
+    parser.add_argument("--atomic_spin_weight", type=float, default=0.0,
+                        help="Weight of masked atomic spin MSE; zero disables supervision")
     parser.add_argument(
         "--magmom_key",
         help="Key of magnetic moment in training xyz",
@@ -1359,6 +1365,8 @@ def build_preprocess_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=DefaultKeys.POLARIZABILITY.value,
     )
+    parser.add_argument("--atomic_spin_key", type=str, default="REF_spin")
+    parser.add_argument("--atomic_spin_mask_key", type=str, default="REF_spin_mask")
     parser.add_argument(
         "--charges_key",
         help="Key of atomic charges in training xyz",

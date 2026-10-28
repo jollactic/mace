@@ -605,6 +605,11 @@ def evaluate(
             output = model(batch_dict, **kwargs)
             avg_loss, aux = metrics(batch, output)
     avg_loss, aux = metrics.compute()
+    if aux.get("num_atomic_spin_labels", 0) > 0:
+        logging.info("Atomic spin validation: RMSE=%.6g, MAE=%.6g (alpha-minus-beta); labels=%d",
+                     aux["rmse_atomic_spin"], aux["mae_atomic_spin"], int(aux["num_atomic_spin_labels"]))
+    elif getattr(loss_fn, "atomic_spin_weight", 0) > 0:
+        logging.warning("Atomic spin supervision is enabled but this evaluation set has no active spin labels")
     aux["time"] = time.time() - start_time
     metrics.reset()
 
@@ -650,10 +655,21 @@ class MACELoss(Metric):
         self.add_state("MagFs", default=[], dist_reduce_fx="cat")
         self.add_state("delta_MagFs", default=[], dist_reduce_fx="cat")
 
+        self.add_state("spin_squared_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("spin_absolute_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("spin_label_count", default=torch.tensor(0.0), dist_reduce_fx="sum")
+
     def update(self, batch, output):  # pylint: disable=arguments-differ
         loss = self.loss_fn(pred=output, ref=batch)
         self.total_loss += loss
         self.num_data += batch.num_graphs
+
+        if output.get("spins") is not None and getattr(batch, "atomic_spin_mask", None) is not None:
+            mask = batch.atomic_spin_mask & (batch.atomic_spin_weight[batch.batch] > 0) & (batch.weight[batch.batch] > 0)
+            delta = (output["spins"] - batch.atomic_spin)[mask].detach()
+            self.spin_squared_error += delta.square().sum()
+            self.spin_absolute_error += delta.abs().sum()
+            self.spin_label_count += delta.numel()
 
         if output.get("energy") is not None and batch.energy is not None:
             self.delta_es.append(batch.energy - output["energy"])
@@ -753,6 +769,11 @@ class MACELoss(Metric):
 
         aux = defaultdict(NoneMultiply)
         aux["loss"] = to_numpy(self.total_loss / self.num_data).item()
+        if self.spin_label_count > 0:
+            aux["rmse_atomic_spin"] = to_numpy((self.spin_squared_error / self.spin_label_count).sqrt()).item()
+            aux["mae_atomic_spin"] = to_numpy(self.spin_absolute_error / self.spin_label_count).item()
+            aux["num_atomic_spin_labels"] = to_numpy(self.spin_label_count).item()
+
         if self.E_computed:
             delta_es = self.convert(self.delta_es)
             delta_es_per_atom = self.convert(self.delta_es_per_atom)

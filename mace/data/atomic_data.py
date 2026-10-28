@@ -437,7 +437,33 @@ class AtomicData(torch_geometric.data.Data):
             else torch.zeros(num_atoms, 1, dtype=torch.get_default_dtype())
         )
 
+        # Scalar alpha-minus-beta targets. Missing atoms/structures are masked,
+        # never interpreted as physical zero-spin labels.
+        spin_values = config.properties.get("atomic_spin")
+        atomic_spin = torch.zeros(num_atoms, dtype=torch.get_default_dtype())
+        atomic_spin_mask = torch.zeros(num_atoms, dtype=torch.bool)
+        if spin_values is not None:
+            spin_values = torch.as_tensor(spin_values, dtype=torch.get_default_dtype())
+            if spin_values.shape != (num_atoms,):
+                raise ValueError("Atomic spin labels must have shape [num_atoms]")
+            if torch.isinf(spin_values).any():
+                raise ValueError("Atomic spin labels may be finite or NaN (unlabelled), not infinite")
+            atomic_spin_mask = torch.isfinite(spin_values)
+            supplied_mask = config.properties.get("atomic_spin_mask")
+            if supplied_mask is not None:
+                supplied_mask = torch.as_tensor(supplied_mask)
+                if supplied_mask.shape != (num_atoms,) or not torch.all((supplied_mask == 0) | (supplied_mask == 1)):
+                    raise ValueError("Atomic spin mask must contain one boolean/0/1 per atom")
+                atomic_spin_mask &= supplied_mask.bool()
+            atomic_spin = torch.where(atomic_spin_mask, spin_values, torch.zeros_like(spin_values))
+        atomic_spin_weight = float(config.property_weights.get("atomic_spin", 1.0))
+        if not torch.isfinite(torch.tensor(atomic_spin_weight)) or atomic_spin_weight < 0:
+            raise ValueError("config_atomic_spin_weight must be finite and nonnegative")
+
         cls_kwargs = dict(
+            atomic_spin=atomic_spin,
+            atomic_spin_mask=atomic_spin_mask,
+            atomic_spin_weight=torch.tensor(atomic_spin_weight, dtype=torch.get_default_dtype()),
             edge_index=torch.tensor(edge_index, dtype=torch.long),
             positions=positions,
             atomic_numbers=torch.tensor(config.atomic_numbers, dtype=torch.long),

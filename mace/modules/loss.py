@@ -657,3 +657,39 @@ class WeightedEnergyForcesL1L2Loss(torch.nn.Module):
             f"{self.__class__.__name__}(energy_weight={self.energy_weight:.3f}, "
             f"forces_weight={self.forces_weight:.3f})"
         )
+
+
+class AtomicSpinLoss(torch.nn.Module):
+    """Add masked scalar alpha-minus-beta supervision to an existing loss."""
+
+    def __init__(self, base_loss, spin_weight):
+        super().__init__()
+        if not torch.isfinite(torch.tensor(spin_weight)) or spin_weight < 0:
+            raise ValueError("atomic_spin_weight must be finite and nonnegative")
+        self.base_loss = base_loss
+        self.register_buffer("atomic_spin_weight", torch.tensor(spin_weight, dtype=torch.get_default_dtype()))
+
+    def forward(self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None):
+        base = self.base_loss(ref, pred, ddp=ddp)
+        if self.atomic_spin_weight == 0:
+            return base
+        if pred.get("spins") is None:
+            raise ValueError("Atomic spin supervision requires PolarMACE scalar 'spins' predictions")
+        prediction, target = pred["spins"], ref["atomic_spin"]
+        if prediction.shape != target.shape:
+            raise ValueError("Predicted and reference atomic spins must both have shape [num_atoms]")
+        weights = ref.weight[ref.batch] * ref.atomic_spin_weight[ref.batch]
+        mask = ref.atomic_spin_mask & (weights > 0)
+        residual = torch.where(mask, prediction-target, torch.zeros_like(prediction))
+        numerator = (weights * residual.square()).sum()
+        count = mask.sum().to(prediction.dtype)
+        distributed = is_ddp_enabled() if ddp is None else ddp
+        scale = 1
+        if distributed and dist.is_initialized():
+            dist.all_reduce(count, op=dist.ReduceOp.SUM)
+            scale = dist.get_world_size()
+        spin_loss = numerator * scale / count.clamp_min(1)
+        return base + self.atomic_spin_weight * spin_loss
+
+    def __repr__(self):
+        return f"AtomicSpinLoss(base={self.base_loss}, atomic_spin_weight={self.atomic_spin_weight.item():g})"
