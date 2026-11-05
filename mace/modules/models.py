@@ -81,6 +81,7 @@ class MACE(torch.nn.Module):
         lammps_mliap: Optional[bool] = False,
         readout_cls: Optional[Type[NonLinearReadoutBlock]] = NonLinearReadoutBlock,
         keep_last_layer_irreps: bool = False,
+        func_emb: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
         self.register_buffer(
@@ -274,6 +275,22 @@ class MACE(torch.nn.Module):
                     )
                 )
 
+        self.func_emb_config = None
+        self._func_backend_supported = not ((cueq_config is not None and cueq_config.enabled) or (oeq_config is not None and oeq_config.enabled))
+        if func_emb is not None:
+            self.configure_func_emb(func_emb)
+
+    def configure_func_emb(self, config) -> None:
+        from mace.modules.func_emb import FunctionalEmbedding
+        if not getattr(self, "_func_backend_supported", True):
+            raise ValueError("func_emb initially supports the standard mul_ir backend only")
+        if len(self.heads) != 1:
+            raise ValueError("func_emb uses one shared output head")
+        sites = {"node_embedding": self.node_embedding.linear.irreps_out}
+        sites.update({f"products.{i}": product.linear.irreps_out for i, product in enumerate(self.products)})
+        self.func_emb = FunctionalEmbedding(config, self.atomic_numbers.tolist(), sites).to(self.atomic_energies_fn.atomic_energies)
+        self.func_emb_config = self.func_emb.config
+
     def forward(
         self,
         data: Dict[str, torch.Tensor],
@@ -313,6 +330,15 @@ class MACE(torch.nn.Module):
         node_e0 = self.atomic_energies_fn(data["node_attrs"])[
             num_atoms_arange, node_heads
         ]
+        functional = getattr(self, "func_emb", None)
+        theory_embedding = None
+        if functional is not None:
+            if is_lammps:
+                raise ValueError("func_emb does not yet support LAMMPS domain decomposition")
+            if "theory_id" not in data:
+                raise ValueError("Missing theory_id; encode level_of_theory using the checkpoint mapping")
+            theory_embedding = functional.node_embeddings(data["theory_id"], data["batch"])
+            node_e0 = functional.atomic_energies(data["theory_id"], data["batch"], data["node_attrs"])
         e0 = scatter_sum(
             src=node_e0, index=data["batch"], dim=0, dim_size=num_graphs
         ).to(
@@ -320,6 +346,8 @@ class MACE(torch.nn.Module):
         )  # [n_graphs, n_heads]
         # Embeddings
         node_feats = self.node_embedding(data["node_attrs"])
+        if functional is not None:
+            node_feats = functional.condition("node_embedding", node_feats, theory_embedding)
         edge_attrs = self.spherical_harmonics(vectors)
         edge_feats, cutoff = self.radial_embedding(
             lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
@@ -384,6 +412,8 @@ class MACE(torch.nn.Module):
             node_feats = product(
                 node_feats=node_feats, sc=sc, node_attrs=node_attrs_slice
             )
+            if functional is not None:
+                node_feats = functional.condition(f"products.{i}", node_feats, theory_embedding)
             node_feats_concat.append(node_feats)
 
         for i, readout in enumerate(self.readouts):
@@ -496,6 +526,15 @@ class ScaleShiftMACE(MACE):
         node_e0 = self.atomic_energies_fn(data["node_attrs"])[
             num_atoms_arange, node_heads
         ]
+        functional = getattr(self, "func_emb", None)
+        theory_embedding = None
+        if functional is not None:
+            if is_lammps:
+                raise ValueError("func_emb does not yet support LAMMPS domain decomposition")
+            if "theory_id" not in data:
+                raise ValueError("Missing theory_id; encode level_of_theory using the checkpoint mapping")
+            theory_embedding = functional.node_embeddings(data["theory_id"], data["batch"])
+            node_e0 = functional.atomic_energies(data["theory_id"], data["batch"], data["node_attrs"])
         e0 = scatter_sum(
             src=node_e0, index=data["batch"], dim=0, dim_size=num_graphs
         ).to(
@@ -504,6 +543,8 @@ class ScaleShiftMACE(MACE):
 
         # Embeddings
         node_feats = self.node_embedding(data["node_attrs"])
+        if functional is not None:
+            node_feats = functional.condition("node_embedding", node_feats, theory_embedding)
         edge_attrs = self.spherical_harmonics(vectors)
         edge_feats, cutoff = self.radial_embedding(
             lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
@@ -567,6 +608,8 @@ class ScaleShiftMACE(MACE):
             node_feats = product(
                 node_feats=node_feats, sc=sc, node_attrs=node_attrs_slice
             )
+            if functional is not None:
+                node_feats = functional.condition(f"products.{i}", node_feats, theory_embedding)
             node_feats_list.append(node_feats)
 
         for i, readout in enumerate(self.readouts):

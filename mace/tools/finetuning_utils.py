@@ -446,6 +446,9 @@ def load_foundations_elements_default(
                 len(model_heads)
             ).clone()
 
+    if getattr(model_foundations, "func_emb_config", None) is not None:
+        if getattr(model, "func_emb_config", None) != model_foundations.func_emb_config:
+            raise ValueError("Changing an existing func_emb vocabulary/config requires explicit embedding transfer")
     model_state = model.state_dict()
     foundation_state = model_foundations.state_dict()
     for name, param in foundation_state.items():

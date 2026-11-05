@@ -229,6 +229,7 @@ def print_git_commit():
 
 def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
     if model.__class__.__name__ not in [
+        "MACE",
         "ScaleShiftMACE",
         "MACELES",
         "PolarMACE",
@@ -236,7 +237,7 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         "AtomicDielectricMACE",
     ]:
         return {
-            "error": "Model is not a ScaleShiftMACE, MACELES, PolarMACE, MagneticScaleShiftMACE, or AtomicDielectricMACE model"
+            "error": "Model is not a MACE, ScaleShiftMACE, MACELES, PolarMACE, MagneticScaleShiftMACE, or AtomicDielectricMACE model"
         }
 
     def radial_to_name(radial_type):
@@ -336,6 +337,8 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
             config["num_mag_radial_basis_one_body"] = int(
                 model.onebody_magmombasis_coeffs.shape[1]
             )
+    if model.__class__.__name__ in {"MACE", "ScaleShiftMACE", "PolarMACE"}:
+        config["func_emb"] = getattr(model, "func_emb_config", None)
     if hasattr(model, "atomic_energies_fn"):
         config["atomic_energies"] = (
             model.atomic_energies_fn.atomic_energies.cpu().numpy()
@@ -380,6 +383,7 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         )
         config["field_norm_factor"] = model.field_norm_factor
         config["field_si"] = model.field_si
+        config["func_emb"] = getattr(model, "func_emb_config", None)
         config["spin_interaction_enabled"] = getattr(model, "spin_interaction_enabled", False)
         config["spin_yukawa_kappa"] = getattr(model, "spin_yukawa_kappa", None)
         config["pbc_handling"] = getattr(model, "pbc_handling", "auto")
@@ -1020,6 +1024,7 @@ def get_params_options(
     # off because these blocks mix biases, gates, and physically meaningful
     # scalars that must not be regularized toward zero.
     optional_submodule_names = [
+        "func_emb",
         "radial_embedding",
         "pair_repulsion_fn",
         "joint_embedding",

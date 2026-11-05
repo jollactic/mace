@@ -586,7 +586,9 @@ def evaluate(
     device: torch.device,
 ) -> Tuple[float, Dict[str, Any]]:
 
-    metrics = MACELoss(loss_fn=loss_fn).to(device)
+    metric_model = model.module if hasattr(model, "module") else model
+    theory_config = getattr(metric_model, "func_emb_config", None)
+    metrics = MACELoss(loss_fn=loss_fn, theory_names=theory_config["theories"] if theory_config else None).to(device)
 
     start_time = time.time()
 
@@ -610,6 +612,9 @@ def evaluate(
                      aux["rmse_atomic_spin"], aux["mae_atomic_spin"], int(aux["num_atomic_spin_labels"]))
     elif getattr(loss_fn, "atomic_spin_weight", 0) > 0:
         logging.warning("Atomic spin supervision is enabled but this evaluation set has no active spin labels")
+    if "theory_metrics" in aux:
+        for name, values in aux["theory_metrics"].items():
+            logging.info("Theory %s validation: %s", name, values)
     aux["time"] = time.time() - start_time
     metrics.reset()
 
@@ -617,9 +622,11 @@ def evaluate(
 
 
 class MACELoss(Metric):
-    def __init__(self, loss_fn: torch.nn.Module):
+    def __init__(self, loss_fn: torch.nn.Module, theory_names=None):
         super().__init__()
         self.loss_fn = loss_fn
+        self.theory_names = list(theory_names or [])
+        self.add_state("theory_stats", default=torch.zeros(len(self.theory_names), 4), dist_reduce_fx="sum")
         self.add_state("total_loss", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("num_data", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("E_computed", default=torch.tensor(0.0), dist_reduce_fx="sum")
@@ -663,6 +670,19 @@ class MACELoss(Metric):
         loss = self.loss_fn(pred=output, ref=batch)
         self.total_loss += loss
         self.num_data += batch.num_graphs
+
+        if self.theory_names:
+            ids = batch.theory_id.reshape(-1)
+            if output.get("energy") is not None:
+                mask = (batch.energy_weight > 0) & (batch.weight > 0)
+                delta = ((output["energy"]-batch.energy)/(batch.ptr[1:]-batch.ptr[:-1])).detach()
+                self.theory_stats[:, 0].index_add_(0, ids[mask], delta[mask].square().to(self.theory_stats))
+                self.theory_stats[:, 1].index_add_(0, ids[mask], torch.ones_like(delta[mask]).to(self.theory_stats))
+            if output.get("forces") is not None:
+                mask = (batch.forces_weight[batch.batch] > 0) & (batch.weight[batch.batch] > 0)
+                delta = (output["forces"]-batch.forces).detach()
+                self.theory_stats[:, 2].index_add_(0, ids[batch.batch][mask], delta[mask].square().sum(-1).to(self.theory_stats))
+                self.theory_stats[:, 3].index_add_(0, ids[batch.batch][mask], torch.full_like(delta[mask, 0], 3).to(self.theory_stats))
 
         if output.get("spins") is not None and getattr(batch, "atomic_spin_mask", None) is not None:
             mask = batch.atomic_spin_mask & (batch.atomic_spin_weight[batch.batch] > 0) & (batch.weight[batch.batch] > 0)
@@ -769,6 +789,17 @@ class MACELoss(Metric):
 
         aux = defaultdict(NoneMultiply)
         aux["loss"] = to_numpy(self.total_loss / self.num_data).item()
+        if self.theory_names:
+            by_theory = {}
+            for i, name in enumerate(self.theory_names):
+                row = self.theory_stats[i]
+                by_theory[name] = {
+                    "energy_rmse_eV_per_atom": float((row[0]/row[1]).sqrt()) if row[1] > 0 else None,
+                    "force_rmse_eV_per_A": float((row[2]/row[3]).sqrt()) if row[3] > 0 else None,
+                    "energy_labels": int(row[1]), "force_components": int(row[3]),
+                }
+            aux["theory_metrics"] = by_theory
+
         if self.spin_label_count > 0:
             aux["rmse_atomic_spin"] = to_numpy((self.spin_squared_error / self.spin_label_count).sqrt()).item()
             aux["mae_atomic_spin"] = to_numpy(self.spin_absolute_error / self.spin_label_count).item()

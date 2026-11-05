@@ -95,6 +95,8 @@ def configure_model(
         logging.info("Loading FOUNDATION model")
         model_config_foundation = extract_config_mace_model(model_foundation)
         model_config_foundation["atomic_energies"] = atomic_energies
+        if getattr(args, "func_emb", None) is not None:
+            model_config_foundation["func_emb"] = args.func_emb
 
         if args.embedding_specs:
             model_config_foundation["embedding_specs"] = args.embedding_specs
@@ -312,6 +314,7 @@ def _build_model(
             radial_type=args.radial_type,
             heads=heads,
             embedding_specs=args.embedding_specs,
+            func_emb=getattr(args, "func_emb", None),
             use_embedding_readout=args.use_embedding_readout,
             use_last_readout_only=args.use_last_readout_only,
             use_agnostic_product=args.use_agnostic_product,
@@ -331,6 +334,7 @@ def _build_model(
             radial_type=args.radial_type,
             heads=heads,
             embedding_specs=args.embedding_specs,
+            func_emb=getattr(args, "func_emb", None),
             use_embedding_readout=args.use_embedding_readout,
             use_last_readout_only=args.use_last_readout_only,
             use_agnostic_product=args.use_agnostic_product,
@@ -343,6 +347,8 @@ def _build_model(
         spin_enabled = getattr(args, "spin_interaction_enabled", None)
         if spin_enabled is not None:
             foundation_config["spin_interaction_enabled"] = spin_enabled
+        if getattr(args, "func_emb", None) is not None:
+            foundation_config["func_emb"] = args.func_emb
         return modules.PolarMACE(**foundation_config)
     if args.model == "PolarMACE":
         field_feature_widths = _parse_literal_or_none(args.field_feature_widths)
@@ -375,6 +381,7 @@ def _build_model(
             ),
             spin_interaction_enabled=(getattr(args, "spin_interaction_enabled", None)
                                       if getattr(args, "spin_interaction_enabled", None) is not None else False),
+            func_emb=getattr(args, "func_emb", None),
             spin_yukawa_kappa=getattr(args, "spin_yukawa_kappa", None),
             num_recursion_steps=args.num_recursion_steps,
             field_si=args.field_si,

@@ -106,6 +106,14 @@ def run(args) -> None:
     tag = tools.get_tag(name=args.name, seed=args.seed)
     args, input_log_messages = tools.check_args(args)
 
+    if getattr(args, "func_emb", None) is not None:
+        from mace.tools.func_emb_utils import normalize_func_emb
+        args.func_emb = normalize_func_emb(args.func_emb)
+        if args.model not in {"MACE", "ScaleShiftMACE", "PolarMACE"} or args.multiheads_finetuning or args.heads is not None:
+            raise ValueError("func_emb requires single-head MACE/ScaleShiftMACE/PolarMACE with --multiheads_finetuning=False")
+        # Existing scaling and E0 plumbing receives the designated reference row.
+        args.E0s = str({int(z): value for z, value in args.func_emb["e0s"][args.func_emb["reference_theory"]].items()})
+
     # default keyspec to update using heads dictionary
     args.key_specification = KeySpecification()
     update_keyspec_from_kwargs(args.key_specification, vars(args))

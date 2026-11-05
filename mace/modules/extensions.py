@@ -688,6 +688,7 @@ class PolarMACE(ScaleShiftMACE):
         pbc_handling: str = "auto",
         spin_yukawa_kappa: Optional[float] = None,
         spin_interaction_enabled: bool = False,
+        func_emb: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         if not GRAPH_LONGRANGE_AVAILABLE:
@@ -962,6 +963,25 @@ class PolarMACE(ScaleShiftMACE):
         )
 
         self.configure_charge_only_tied_fields()
+        self.func_emb_config = None
+        self._func_backend_supported = not ((cueq_config is not None and cueq_config.enabled) or (oeq_config is not None and oeq_config.enabled))
+        if func_emb is not None:
+            self.configure_func_emb(func_emb)
+
+    def configure_func_emb(self, config) -> None:
+        from .func_emb import FunctionalEmbedding
+        cueq = getattr(self, "cueq_config", None)
+        if not getattr(self, "_func_backend_supported", True) or (cueq is not None and getattr(cueq, "enabled", False)):
+            raise ValueError("func_emb initially supports the standard mul_ir backend only")
+        if len(self.heads) != 1:
+            raise ValueError("func_emb uses one shared output head")
+        sites = {"node_embedding": self.node_embedding.linear.irreps_out}
+        for i, product in enumerate(self.products):
+            sites[f"products.{i}"] = product.linear.irreps_out
+        for i, update in enumerate(self.field_dependent_charges_maps):
+            sites[f"charge_updates.{i}"] = update.node_feats_irreps
+        self.func_emb = FunctionalEmbedding(config, self.atomic_numbers.tolist(), sites).to(self.atomic_energies_fn.atomic_energies)
+        self.func_emb_config = self.func_emb.config
 
     def configure_charge_only_tied_fields(self) -> None:
         """Idempotently convert pretrained field maps; this branch is charge-only."""
@@ -1076,11 +1096,22 @@ class PolarMACE(ScaleShiftMACE):
         node_e0 = self.atomic_energies_fn(data["node_attrs"])[
             num_atoms_arange, node_heads
         ]
+        functional = getattr(self, "func_emb", None)
+        theory_embedding = None
+        if functional is not None:
+            if is_lammps:
+                raise ValueError("func_emb does not yet support LAMMPS domain decomposition")
+            if "theory_id" not in data:
+                raise ValueError("Missing theory_id; encode level_of_theory using the checkpoint mapping")
+            theory_embedding = functional.node_embeddings(data["theory_id"], data["batch"])
+            node_e0 = functional.atomic_energies(data["theory_id"], data["batch"], data["node_attrs"])
         e0 = scatter_sum(
             src=node_e0, index=data["batch"], dim=0, dim_size=num_graphs
         ).to(vectors.dtype)
 
         node_feats = self.node_embedding(data["node_attrs"])
+        if functional is not None:
+            node_feats = functional.condition("node_embedding", node_feats, theory_embedding)
         edge_attrs = self.spherical_harmonics(_permute_to_e3nn_convention(vectors))
         edge_feats, cutoff = self.radial_embedding(
             lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
@@ -1124,6 +1155,8 @@ class PolarMACE(ScaleShiftMACE):
             node_feats = product(
                 node_feats=node_feats, sc=sc, node_attrs=node_attrs_slice
             )
+            if functional is not None:
+                node_feats = functional.condition(f"products.{i}", node_feats, theory_embedding)
             node_feats_list.append(node_feats)
 
             feat_idx = -1 if len(self.readouts) == 1 else min(i, len(self.readouts) - 1)
@@ -1260,7 +1293,8 @@ class PolarMACE(ScaleShiftMACE):
             )
             charge_sources_out = self.field_dependent_charges_maps[i](
                 node_attrs=data["node_attrs"],
-                node_feats=features_mixed,
+                node_feats=(functional.condition(f"charge_updates.{i}", features_mixed, theory_embedding)
+                            if functional is not None else features_mixed),
                 edge_attrs=edge_attrs[:, : self.from_ell_max_field_update],
                 edge_feats=edge_feats,
                 edge_index=data["edge_index"],

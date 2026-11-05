@@ -705,6 +705,8 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=DefaultKeys.POLARIZABILITY.value,
     )
+    parser.add_argument("--func_emb", type=read_yaml, default=None,
+                        help="YAML/JSON configuration for theory conditioning and per-theory E0s (PolarMACE)")
     parser.add_argument("--atomic_spin_key", type=str, default="REF_spin",
                         help="Scalar per-atom alpha-minus-beta spin target array")
     parser.add_argument("--atomic_spin_mask_key", type=str, default="REF_spin_mask",
@@ -1367,6 +1369,7 @@ def build_preprocess_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=DefaultKeys.POLARIZABILITY.value,
     )
+    parser.add_argument("--func_emb", type=read_yaml, default=None)
     parser.add_argument("--atomic_spin_key", type=str, default="REF_spin")
     parser.add_argument("--atomic_spin_mask_key", type=str, default="REF_spin_mask")
     parser.add_argument(

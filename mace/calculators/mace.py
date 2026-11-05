@@ -373,6 +373,10 @@ class MACECalculator(Calculator):
                 self.models = [model.float() for model in self.models]
         self.default_dtype = default_dtype
 
+        if any(getattr(model, "func_emb_config", None) is not None for model in self.models):
+            if enable_cueq or enable_oeq or compile_mode is not None:
+                raise ValueError("func_emb currently supports uncompiled standard e3nn ASE execution only")
+
         if enable_cueq and enable_oeq:
             logging.info(
                 "Converting models to hybrid cueq+oeq: "
@@ -611,6 +615,10 @@ class MACECalculator(Calculator):
         keyspec = mace_data.KeySpecification(
             info_keys=self.info_keys, arrays_keys=self.arrays_keys
         )
+        theory_configs = [getattr(model, "func_emb_config", None) for model in self.models]
+        if any(config != theory_configs[0] for config in theory_configs):
+            raise ValueError("Committee models must share a func_emb theory mapping/configuration")
+        keyspec.func_emb = theory_configs[0]
         with torch_tools.default_dtype(self.default_dtype):
             config = mace_data.config_from_atoms(
                 atoms, key_specification=keyspec, head_name=self.head

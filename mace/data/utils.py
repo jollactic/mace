@@ -28,6 +28,7 @@ DEFAULT_CONFIG_TYPE_WEIGHTS = {DEFAULT_CONFIG_TYPE: 1.0}
 class KeySpecification:
     info_keys: Dict[str, str] = field(default_factory=dict)
     arrays_keys: Dict[str, str] = field(default_factory=dict)
+    func_emb: Optional[Dict[str, Any]] = None
 
     def update(
         self,
@@ -49,6 +50,9 @@ class KeySpecification:
 def update_keyspec_from_kwargs(
     keyspec: KeySpecification, keydict: Dict[str, str]
 ) -> KeySpecification:
+    if keydict.get("func_emb") is not None:
+        from mace.tools.func_emb_utils import normalize_func_emb
+        keyspec.func_emb = normalize_func_emb(keydict["func_emb"])
     # convert command line style property_key arguments into a keyspec
     infos = [
         "energy_key",
@@ -203,6 +207,13 @@ def config_from_atoms(
         properties[name] = atoms.arrays.get(atoms_key, None)
         if not atoms_key in atoms.arrays:
             property_weights[name] = 0.0
+
+    if key_specification.func_emb is not None:
+        from mace.tools.func_emb_utils import encode_theory
+        theory_id = encode_theory(atoms.info, key_specification.func_emb)
+        properties["theory_id"] = np.array([theory_id], dtype=np.int64)
+        name = key_specification.func_emb["theories"][theory_id]
+        weight *= key_specification.func_emb["loss_weights"][name]
 
     return Configuration(
         atomic_numbers=atomic_numbers,
